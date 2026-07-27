@@ -1,0 +1,55 @@
+name: Recolección horaria de clima
+
+on:
+  schedule:
+    # Se ejecuta al minuto 0 de cada hora (hora UTC).
+    - cron: "0 * * * *"
+  workflow_dispatch: {}   # permite ejecutarlo manualmente desde la pestaña "Actions"
+
+# Evita que dos ejecuciones se pisen si una corre más lento de lo normal.
+concurrency:
+  group: weather-collector
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # necesario para poder commitear weather.db de vuelta al repo
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Ejecutar recolección de clima
+        run: python fetch_weather.py
+
+      - name: Commitear y subir weather.db si hubo cambios
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if [ -n "$(git status --porcelain weather.db)" ]; then
+            git add weather.db
+            git commit -m "Actualiza weather.db - $(date -u +'%Y-%m-%d %H:%M UTC')"
+
+            # Por si otro run llegó a pushear justo antes que este.
+            for i in 1 2 3; do
+              git pull --rebase && git push && break
+              echo "Push falló, reintentando ($i/3)..."
+              sleep 5
+            done
+          else
+            echo "Sin cambios para commitear."
+          fi
